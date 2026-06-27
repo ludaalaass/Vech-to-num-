@@ -9,358 +9,356 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-
+// =====================
 // CONFIG
+// =====================
 
 const BACKEND_API =
-"https://vehicleinfo.noobgamingv40.workers.dev/fetch";
+  "https://vehicleinfo.noobgamingv40.workers.dev/fetch";
 
 const DEVELOPER = "@sahilxalone";
 
-const VALID_KEY = "Demo";
+// API KEYS
+const DEMO_KEY = "Demo";
+const ADMIN_KEY = "sahil";
 
-
+// =====================
 // 7 DAYS EXPIRY
+// =====================
 
 const START_TIME = Date.now();
 
 const EXPIRE_AFTER =
-7 * 24 * 60 * 60 * 1000;
+  7 * 24 * 60 * 60 * 1000;
 
-
+// =====================
 // RATE LIMIT
+// =====================
 
 const LIMIT_MIN = 3;
 const LIMIT_DAY = 1100;
 
 const users = {};
 
-
+// =====================
 // RATE CHECK
+// =====================
 
-function checkLimit(key){
+function checkLimit(key) {
 
- const now = Date.now();
+  const now = Date.now();
 
+  if (!users[key]) {
 
- if(!users[key]){
+    users[key] = {
 
-  users[key]={
+      minute: {
+        count: 0,
+        reset: now + 60000
+      },
 
-   minute:{
-    count:0,
-    reset:now+60000
-   },
+      day: {
+        count: 0,
+        reset: now + 86400000
+      }
 
-   day:{
-    count:0,
-    reset:now+86400000
-   }
+    };
 
-  };
+  }
 
- }
+  let u = users[key];
 
+  if (now > u.minute.reset) {
 
- let u = users[key];
+    u.minute = {
+      count: 0,
+      reset: now + 60000
+    };
 
+  }
 
- if(now > u.minute.reset){
+  if (now > u.day.reset) {
 
-  u.minute={
-   count:0,
-   reset:now+60000
-  };
+    u.day = {
+      count: 0,
+      reset: now + 86400000
+    };
 
- }
+  }
 
+  if (u.minute.count >= LIMIT_MIN) {
 
- if(now > u.day.reset){
+    return {
+      ok: false,
+      msg: "Rate limit: 3 request per minute"
+    };
 
-  u.day={
-   count:0,
-   reset:now+86400000
-  };
+  }
 
- }
+  if (u.day.count >= LIMIT_DAY) {
 
+    return {
+      ok: false,
+      msg: "Daily limit 1100 finished"
+    };
 
- if(u.minute.count >= LIMIT_MIN){
+  }
+
+  u.minute.count++;
+  u.day.count++;
 
   return {
-   ok:false,
-   msg:"Rate limit: 3 request per minute"
+    ok: true
   };
-
- }
-
-
- if(u.day.count >= LIMIT_DAY){
-
-  return {
-   ok:false,
-   msg:"Daily limit 1100 finished"
-  };
-
- }
-
-
- u.minute.count++;
- u.day.count++;
-
-
- return {ok:true};
 
 }
 
-
-
+// =====================
 // HOME
+// =====================
 
+app.get("/", (req, res) => {
 
-app.get("/",(req,res)=>{
+  res.json({
 
- res.json({
+    message:
+      "You are not hacker nigga 😎",
 
-  message:
-  "You are not hacker nigga 😎",
+    developer:
+      DEVELOPER
 
-  developer:
-  DEVELOPER
-
- });
+  });
 
 });
 
+// =====================
+// VEHICLE API
+// =====================
 
+app.get("/vehicle", async (req, res) => {
 
-// VEHICLE
+  try {
 
+    const key = req.query.key;
 
-app.get("/vehicle",async(req,res)=>{
+    const vehicle =
+      req.query.vehicle ||
+      req.query.number;
 
+    // =====================
+    // KEY CHECK
+    // =====================
 
-try{
+    if (key !== DEMO_KEY && key !== ADMIN_KEY) {
 
+      return res.status(403).json({
 
- const key=req.query.key;
+        developer:
+          DEVELOPER,
 
+        success:
+          false,
 
- const vehicle =
- req.query.vehicle ||
- req.query.number;
+        error:
+          "Invalid API Key",
 
+        developer_footer:
+          DEVELOPER
 
+      });
 
- // KEY CHECK
+    }
 
+    // =====================
+    // DEMO TRIAL OFF
+    // =====================
 
- if(key !== VALID_KEY){
+    if (key === DEMO_KEY) {
 
+      return res.json({
 
- return res.status(403).json({
+        developer:
+          DEVELOPER,
 
-  developer:DEVELOPER,
+        success:
+          false,
 
-  success:false,
+        error:
+          "Trial is OFF.\nIf you need to buy contact on Telegram @sahilxalone",
 
-  error:"Invalid API Key",
+        developer_footer:
+          DEVELOPER
 
-  developer_footer:
-  DEVELOPER
+      });
 
- });
+    }
 
+    // =====================
+    // EXPIRY CHECK
+    // =====================
 
- }
+    if (Date.now() - START_TIME > EXPIRE_AFTER) {
 
+      return res.json({
 
+        developer:
+          DEVELOPER,
 
- // EXPIRY CHECK
+        success:
+          false,
 
+        error:
+          "API expired contact @sahilxalone",
 
- if(Date.now()-START_TIME > EXPIRE_AFTER){
+        developer_footer:
+          DEVELOPER
 
+      });
 
- return res.json({
+    }
 
-  developer:
-  DEVELOPER,
+    // =====================
+    // RATE LIMIT
+    // =====================
 
-  success:false,
+    const limit =
+      checkLimit(key);
 
-  error:
-  "API expired contact @sahilxalone",
+    if (!limit.ok) {
 
-  developer_footer:
-  DEVELOPER
+      return res.status(429).json({
 
- });
+        developer:
+          DEVELOPER,
 
+        success:
+          false,
 
- }
+        error:
+          limit.msg,
 
+        developer_footer:
+          DEVELOPER
 
+      });
 
- // RATE CHECK
+    }
 
+    // =====================
+    // VEHICLE CHECK
+    // =====================
 
- const limit =
- checkLimit(key);
+    if (!vehicle) {
 
+      return res.json({
 
- if(!limit.ok){
+        developer:
+          DEVELOPER,
 
+        success:
+          false,
 
- return res.status(429).json({
+        error:
+          "Vehicle number required",
 
-  developer:
-  DEVELOPER,
+        developer_footer:
+          DEVELOPER
 
-  success:false,
+      });
 
-  error:
-  limit.msg,
+    }
 
-  developer_footer:
-  DEVELOPER
+    // =====================
+    // BACKEND REQUEST
+    // =====================
 
- });
+    const response =
+      await axios.get(
 
+        BACKEND_API,
 
- }
+        {
 
+          params: {
+            vehicle: vehicle
+          },
 
+          headers: {
 
+            "User-Agent":
+              "Mozilla/5.0"
 
- if(!vehicle){
+          },
 
+          timeout:
+            120000
 
- return res.json({
+        }
 
-  developer:
-  DEVELOPER,
+      );
 
-  success:false,
+    // =====================
+    // FINAL RESPONSE
+    // =====================
 
-  error:
-  "Vehicle number required",
+    const final = {
 
-  developer_footer:
-  DEVELOPER
+      developer:
+        DEVELOPER,
 
- });
+      result:
+        response.data,
 
+      developer_footer:
+        DEVELOPER
 
- }
+    };
 
+    res.setHeader(
+      "Content-Type",
+      "application/json"
+    );
 
+    res.send(
+      JSON.stringify(
+        final,
+        null,
+        2
+      )
+    );
 
- const response =
- await axios.get(
- BACKEND_API,
- {
+  }
 
- params:{
-  vehicle:vehicle
- },
+  catch (e) {
 
+    res.status(500).json({
 
- headers:{
+      developer:
+        DEVELOPER,
 
-  "User-Agent":
-  "Mozilla/5.0"
+      success:
+        false,
 
- },
+      error:
+        e.message,
 
+      developer_footer:
+        DEVELOPER
 
- timeout:
- 120000
+    });
 
-
- });
-
-
-
-
- const final = {
-
-
- developer:
- DEVELOPER,
-
-
- result:
- response.data,
-
-
- developer_footer:
- DEVELOPER
-
-
- };
-
-
-
- res.setHeader(
- "Content-Type",
- "application/json"
- );
-
-
-
- res.send(
-
- JSON.stringify(
- final,
- null,
- 2
- )
-
- );
-
-
-
-
-}catch(e){
-
-
-
- res.status(500).json({
-
-
- developer:
- DEVELOPER,
-
-
- success:false,
-
-
- error:
- e.message,
-
-
- developer_footer:
- DEVELOPER
-
-
- });
-
-
-}
-
+  }
 
 });
 
+// =====================
+// START SERVER
+// =====================
 
+app.listen(PORT, () => {
 
-// START
-
-
-app.listen(PORT,()=>{
-
- console.log(
- "Running "+PORT
- );
+  console.log(
+    "Running on port " + PORT
+  );
 
 });
