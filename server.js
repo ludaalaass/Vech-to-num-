@@ -28,8 +28,11 @@ const ADMIN_KEY = "sahil";
 
 const START_TIME = Date.now();
 
-const EXPIRE_AFTER =
+const EXPIRE_7_DAYS =
   7 * 24 * 60 * 60 * 1000;
+
+const EXPIRE_1_MONTH =
+  30 * 24 * 60 * 60 * 1000;
 
 // =====================
 // RATE LIMIT
@@ -197,7 +200,12 @@ app.get("/vehicle", async (req, res) => {
     // EXPIRY CHECK
     // =====================
 
-    if (Date.now() - START_TIME > EXPIRE_AFTER) {
+    const expiry =
+  key === ADMIN_KEY
+    ? EXPIRE_1_MONTH
+    : EXPIRE_7_DAYS;
+
+if (Date.now() - START_TIME > expiry) {
 
       return res.json({
 
