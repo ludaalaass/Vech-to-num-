@@ -1,20 +1,19 @@
 {
-  "name": "vehicle-api-proxy",
+  "name": "vehicle-admin",
   "version": "1.0.0",
-  "description": "Vehicle Info Proxy API",
   "main": "server.js",
-
   "scripts": {
     "start": "node server.js"
   },
-
   "dependencies": {
-    "axios": "^1.6.8",
-    "cors": "^2.8.5",
-    "express": "^4.18.3"
-  },
-
-  "engines": {
-    "node": ">=18"
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "ejs": "^3.1.9",
+    "mysql2": "^3.6.5",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.3.1",
+    "axios": "^1.6.2",
+    "chart.js": "^4.4.0",
+    "uuid": "^9.0.0"
   }
 }
