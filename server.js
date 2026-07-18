@@ -1,23 +1,66 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
 
-// Database Pool
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASS || '',
-  database: process.env.DB_NAME || 'vehicle_admin',
-  waitForConnections: true,
-  connectionLimit: 10
-});
+// Data directory
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+
+// JSON File Helpers
+function readJSON(filename) {
+  const filepath = path.join(DATA_DIR, filename);
+  if (!fs.existsSync(filepath)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(filepath, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function writeJSON(filename, data) {
+  fs.writeFileSync(path.join(DATA_DIR, filename), JSON.stringify(data, null, 2));
+}
+
+// Initialize default data
+function initData() {
+  // Admins
+  if (!fs.existsSync(path.join(DATA_DIR, 'admins.json'))) {
+    const hash = bcrypt.hashSync('aura@1234', 10);
+    writeJSON('admins.json', [
+      { id: 1, username: 'superadmin', password: hash, created_at: new Date().toISOString() }
+    ]);
+  }
+  
+  // Settings
+  if (!fs.existsSync(path.join(DATA_DIR, 'settings.json'))) {
+    writeJSON('settings.json', {
+      id: 1,
+      site_name: 'Vehicle Admin',
+      maintenance_mode: false,
+      api_base_url: 'https://vehicleinfo.noobgamingv40.workers.dev/fetch',
+      theme: 'light',
+      api_enabled: true
+    });
+  }
+  
+  // API Keys
+  if (!fs.existsSync(path.join(DATA_DIR, 'api_keys.json'))) {
+    writeJSON('api_keys.json', []);
+  }
+  
+  // Request Logs
+  if (!fs.existsSync(path.join(DATA_DIR, 'request_logs.json'))) {
+    writeJSON('request_logs.json', []);
+  }
+}
+initData();
 
 // Middleware
 app.use(express.json());
@@ -31,86 +74,27 @@ app.use(session({
   cookie: { maxAge: 3600000 }
 }));
 
-// Initialize DB
-async function initDB() {
-  const conn = await pool.getConnection();
-  await conn.query(`
-    CREATE TABLE IF NOT EXISTS admins (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      username VARCHAR(50) UNIQUE,
-      password VARCHAR(255),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await conn.query(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      owner_name VARCHAR(100),
-      api_key VARCHAR(64) UNIQUE,
-      expiry_days INT DEFAULT 30,
-      expiry_date DATE,
-      daily_limit INT DEFAULT 100,
-      total_limit INT DEFAULT 10000,
-      status ENUM('active','disabled','expired') DEFAULT 'active',
-      request_count INT DEFAULT 0,
-      today_requests INT DEFAULT 0,
-      today_date DATE,
-      last_used TIMESTAMP NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await conn.query(`
-    CREATE TABLE IF NOT EXISTS request_logs (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      api_key VARCHAR(64),
-      owner_name VARCHAR(100),
-      vehicle_number VARCHAR(20),
-      ip_address VARCHAR(45),
-      user_agent TEXT,
-      response_status VARCHAR(10),
-      response_time_ms INT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await conn.query(`
-    CREATE TABLE IF NOT EXISTS settings (
-      id INT PRIMARY KEY DEFAULT 1,
-      site_name VARCHAR(100) DEFAULT 'Vehicle Admin',
-      maintenance_mode BOOLEAN DEFAULT FALSE,
-      api_base_url VARCHAR(255) DEFAULT 'https://vehicleinfo.noobgamingv40.workers.dev/fetch',
-      theme VARCHAR(10) DEFAULT 'light',
-      api_enabled BOOLEAN DEFAULT TRUE
-    )
-  `);
-  
-  // Default admin
-  const hash = await bcrypt.hash('aura@1234', 10);
-  await conn.query(`INSERT IGNORE INTO admins (username, password) VALUES ('superadmin', ?)`, [hash]);
-  await conn.query(`INSERT IGNORE INTO settings (id) VALUES (1)`);
-  conn.release();
-}
-initDB();
-
-// Auth Middleware
 const requireAuth = (req, res, next) => {
   if (!req.session.admin) return res.redirect('/login');
   next();
 };
 
-// ============ AUTH ROUTES ============
+// ============ AUTH ============
 
 app.get('/login', (req, res) => {
-  res.render('login', { error: null, theme: 'light' });
+  res.render('login', { error: null });
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', (req, res) => {
   const { username, password } = req.body;
-  const [rows] = await pool.query('SELECT * FROM admins WHERE username = ?', [username]);
-  if (rows.length && await bcrypt.compare(password, rows[0].password)) {
-    req.session.admin = rows[0];
+  const admins = readJSON('admins.json');
+  const admin = admins.find(a => a.username === username);
+  
+  if (admin && bcrypt.compareSync(password, admin.password)) {
+    req.session.admin = admin;
     return res.redirect('/');
   }
-  res.render('login', { error: 'Invalid credentials', theme: 'light' });
+  res.render('login', { error: 'Invalid credentials' });
 });
 
 app.get('/logout', (req, res) => {
@@ -120,229 +104,253 @@ app.get('/logout', (req, res) => {
 
 // ============ DASHBOARD ============
 
-app.get('/', requireAuth, async (req, res) => {
-  const [settings] = await pool.query('SELECT * FROM settings WHERE id=1');
-  const [totalReq] = await pool.query('SELECT COUNT(*) as count FROM request_logs');
-  const [todayReq] = await pool.query('SELECT COUNT(*) as count FROM request_logs WHERE DATE(created_at) = CURDATE()');
-  const [monthReq] = await pool.query('SELECT COUNT(*) as count FROM request_logs WHERE MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE())');
-  const [totalKeys] = await pool.query('SELECT COUNT(*) as count FROM api_keys');
-  const [activeKeys] = await pool.query("SELECT COUNT(*) as count FROM api_keys WHERE status='active'");
-  const [expiredKeys] = await pool.query("SELECT COUNT(*) as count FROM api_keys WHERE status='expired'");
-  const [disabledKeys] = await pool.query("SELECT COUNT(*) as count FROM api_keys WHERE status='disabled'");
-  const [totalAdmins] = await pool.query('SELECT COUNT(*) as count FROM admins');
+app.get('/', requireAuth, (req, res) => {
+  const settings = readJSON('settings.json');
+  const logs = readJSON('request_logs.json');
+  const keys = readJSON('api_keys.json');
+  const admins = readJSON('admins.json');
   
-  // Charts data
-  const [dailyData] = await pool.query(`
-    SELECT DATE(created_at) as date, COUNT(*) as count 
-    FROM request_logs 
-    WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) 
-    GROUP BY DATE(created_at)
-    ORDER BY DATE(created_at)
-  `);
+  const today = new Date().toISOString().split('T')[0];
+  const thisMonth = new Date().toISOString().substring(0, 7);
   
-  const [monthlyData] = await pool.query(`
-    SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count 
-    FROM request_logs 
-    WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) 
-    GROUP BY month
-    ORDER BY month
-  `);
+  const totalReq = logs.length;
+  const todayReq = logs.filter(l => l.created_at && l.created_at.startsWith(today)).length;
+  const monthReq = logs.filter(l => l.created_at && l.created_at.startsWith(thisMonth)).length;
+  const activeKeys = keys.filter(k => k.status === 'active').length;
+  const expiredKeys = keys.filter(k => k.status === 'expired').length;
+  const disabledKeys = keys.filter(k => k.status === 'disabled').length;
   
-  const [topKeys] = await pool.query(`
-    SELECT api_key, owner_name, COUNT(*) as count 
-    FROM request_logs 
-    GROUP BY api_key, owner_name 
-    ORDER BY count DESC 
-    LIMIT 10
-  `);
+  // Daily chart data (last 7 days)
+  const dailyData = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const count = logs.filter(l => l.created_at && l.created_at.startsWith(dateStr)).length;
+    dailyData.push({ date: dateStr, count });
+  }
   
-  const [successFailed] = await pool.query(`
-    SELECT response_status, COUNT(*) as count 
-    FROM request_logs 
-    GROUP BY response_status
-  `);
+  // Top keys
+  const keyUsage = {};
+  logs.forEach(l => {
+    if (l.api_key) {
+      keyUsage[l.api_key] = (keyUsage[l.api_key] || 0) + 1;
+    }
+  });
+  const topKeys = Object.entries(keyUsage)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([api_key, count]) => {
+      const key = keys.find(k => k.api_key === api_key);
+      return { api_key, owner_name: key ? key.owner_name : 'Unknown', count };
+    });
   
-  const [topVehicles] = await pool.query(`
-    SELECT vehicle_number, COUNT(*) as count 
-    FROM request_logs 
-    GROUP BY vehicle_number 
-    ORDER BY count DESC 
-    LIMIT 10
-  `);
+  // Success vs Failed
+  const successCount = logs.filter(l => l.response_status === 'success').length;
+  const failedCount = logs.filter(l => l.response_status === 'failed').length;
+  const otherCount = totalReq - successCount - failedCount;
+  const successFailed = [
+    { response_status: 'success', count: successCount },
+    { response_status: 'failed', count: failedCount },
+    { response_status: 'other', count: otherCount }
+  ];
+  
+  // Monthly data
+  const monthlyMap = {};
+  logs.forEach(l => {
+    if (l.created_at) {
+      const month = l.created_at.substring(0, 7);
+      monthlyMap[month] = (monthlyMap[month] || 0) + 1;
+    }
+  });
+  const monthlyData = Object.entries(monthlyMap).map(([month, count]) => ({ month, count }));
   
   res.render('dashboard', {
     stats: {
-      total: totalReq[0].count,
-      today: todayReq[0].count,
-      month: monthReq[0].count,
-      totalKeys: totalKeys[0].count,
-      activeKeys: activeKeys[0].count,
-      expiredKeys: expiredKeys[0].count,
-      disabledKeys: disabledKeys[0].count,
-      totalAdmins: totalAdmins[0].count,
-      apiStatus: settings[0].api_enabled ? 'Online' : 'Offline',
-      maintenance: settings[0].maintenance_mode ? 'ON' : 'OFF'
+      total: totalReq,
+      today: todayReq,
+      month: monthReq,
+      totalKeys: keys.length,
+      activeKeys,
+      expiredKeys,
+      disabledKeys,
+      apiStatus: settings.api_enabled ? 'Online' : 'Offline',
+      maintenance: settings.maintenance_mode ? 'ON' : 'OFF'
     },
     dailyData: JSON.stringify(dailyData),
-    monthlyData: JSON.stringify(monthlyData),
     topKeys: JSON.stringify(topKeys),
     successFailed: JSON.stringify(successFailed),
-    topVehicles: JSON.stringify(topVehicles),
-    settings: settings[0],
+    monthlyData: JSON.stringify(monthlyData),
+    settings,
     admin: req.session.admin
   });
 });
 
-// ============ API KEYS MANAGEMENT ============
+// ============ API KEYS ============
 
-app.get('/keys', requireAuth, async (req, res) => {
+app.get('/keys', requireAuth, (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const search = req.query.search || '';
   const limit = 20;
-  const offset = (page - 1) * limit;
   
-  let query = 'SELECT * FROM api_keys';
-  let countQuery = 'SELECT COUNT(*) as count FROM api_keys';
-  const params = [];
+  let keys = readJSON('api_keys.json');
   
   if (search) {
-    query += ' WHERE owner_name LIKE ? OR api_key LIKE ?';
-    countQuery += ' WHERE owner_name LIKE ? OR api_key LIKE ?';
-    params.push(`%${search}%`, `%${search}%`);
+    keys = keys.filter(k => 
+      k.owner_name.toLowerCase().includes(search.toLowerCase()) || 
+      k.api_key.includes(search)
+    );
   }
   
-  query += ' ORDER BY created_at DESC LIMIT ?, ?';
-  const [keys] = await pool.query(query, [...params, offset, limit]);
-  const [total] = await pool.query(countQuery, params);
+  keys.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   
-  res.render('keys', { 
-    keys, 
-    page, 
-    search,
-    totalPages: Math.ceil(total[0].count / limit),
-    admin: req.session.admin 
-  });
+  const total = keys.length;
+  const totalPages = Math.ceil(total / limit);
+  const offset = (page - 1) * limit;
+  const pagedKeys = keys.slice(offset, offset + limit);
+  
+  res.render('keys', { keys: pagedKeys, page, search, totalPages, admin: req.session.admin });
 });
 
-app.post('/keys/generate', requireAuth, async (req, res) => {
+app.post('/keys/generate', requireAuth, (req, res) => {
   const { owner_name, expiry_days, daily_limit, total_limit, custom_key } = req.body;
+  const keys = readJSON('api_keys.json');
+  
   const api_key = custom_key || uuidv4().replace(/-/g, '').substring(0, 32);
+  
+  // Check duplicate
+  if (keys.find(k => k.api_key === api_key)) {
+    return res.send('<script>alert("API Key exists!"); window.location="/keys";</script>');
+  }
+  
   const expiry_date = new Date();
   expiry_date.setDate(expiry_date.getDate() + parseInt(expiry_days || 30));
   
-  // Check duplicate
-  const [existing] = await pool.query('SELECT id FROM api_keys WHERE api_key = ?', [api_key]);
-  if (existing.length) {
-    return res.send('<script>alert("API Key already exists!"); window.location="/keys";</script>');
+  keys.push({
+    id: Date.now(),
+    owner_name,
+    api_key,
+    expiry_days: parseInt(expiry_days || 30),
+    expiry_date: expiry_date.toISOString().split('T')[0],
+    daily_limit: parseInt(daily_limit || 100),
+    total_limit: parseInt(total_limit || 10000),
+    status: 'active',
+    request_count: 0,
+    today_requests: 0,
+    today_date: null,
+    last_used: null,
+    created_at: new Date().toISOString()
+  });
+  
+  writeJSON('api_keys.json', keys);
+  res.redirect('/keys');
+});
+
+app.get('/keys/toggle/:id', requireAuth, (req, res) => {
+  const keys = readJSON('api_keys.json');
+  const key = keys.find(k => k.id == req.params.id);
+  if (key) {
+    key.status = key.status === 'active' ? 'disabled' : 'active';
+    writeJSON('api_keys.json', keys);
   }
-  
-  await pool.query(
-    'INSERT INTO api_keys (owner_name, api_key, expiry_days, expiry_date, daily_limit, total_limit) VALUES (?,?,?,?,?,?)',
-    [owner_name, api_key, expiry_days, expiry_date, daily_limit, total_limit]
-  );
   res.redirect('/keys');
 });
 
-app.get('/keys/toggle/:id', requireAuth, async (req, res) => {
-  const [key] = await pool.query('SELECT * FROM api_keys WHERE id = ?', [req.params.id]);
-  if (!key.length) return res.redirect('/keys');
-  
-  const newStatus = key[0].status === 'active' ? 'disabled' : 'active';
-  await pool.query('UPDATE api_keys SET status = ? WHERE id = ?', [newStatus, req.params.id]);
+app.get('/keys/delete/:id', requireAuth, (req, res) => {
+  let keys = readJSON('api_keys.json');
+  keys = keys.filter(k => k.id != req.params.id);
+  writeJSON('api_keys.json', keys);
   res.redirect('/keys');
 });
 
-app.get('/keys/delete/:id', requireAuth, async (req, res) => {
-  await pool.query('DELETE FROM api_keys WHERE id = ?', [req.params.id]);
+app.get('/keys/reset/:id', requireAuth, (req, res) => {
+  const keys = readJSON('api_keys.json');
+  const key = keys.find(k => k.id == req.params.id);
+  if (key) {
+    key.request_count = 0;
+    key.today_requests = 0;
+    writeJSON('api_keys.json', keys);
+  }
   res.redirect('/keys');
 });
 
-app.get('/keys/reset/:id', requireAuth, async (req, res) => {
-  await pool.query('UPDATE api_keys SET request_count = 0, today_requests = 0 WHERE id = ?', [req.params.id]);
-  res.redirect('/keys');
-});
-
-app.post('/keys/extend/:id', requireAuth, async (req, res) => {
+app.post('/keys/extend/:id', requireAuth, (req, res) => {
   const { days } = req.body;
-  const [key] = await pool.query('SELECT * FROM api_keys WHERE id = ?', [req.params.id]);
-  if (!key.length) return res.redirect('/keys');
-  
-  const newDate = new Date(key[0].expiry_date);
-  newDate.setDate(newDate.getDate() + parseInt(days));
-  
-  await pool.query(
-    'UPDATE api_keys SET expiry_date = ?, expiry_days = expiry_days + ?, status = "active" WHERE id = ?', 
-    [newDate, days, req.params.id]
-  );
+  const keys = readJSON('api_keys.json');
+  const key = keys.find(k => k.id == req.params.id);
+  if (key) {
+    const newDate = new Date(key.expiry_date);
+    newDate.setDate(newDate.getDate() + parseInt(days));
+    key.expiry_date = newDate.toISOString().split('T')[0];
+    key.expiry_days += parseInt(days);
+    key.status = 'active';
+    writeJSON('api_keys.json', keys);
+  }
   res.redirect('/keys');
 });
 
-app.post('/keys/edit/:id', requireAuth, async (req, res) => {
+app.post('/keys/edit/:id', requireAuth, (req, res) => {
   const { owner_name, daily_limit, total_limit } = req.body;
-  await pool.query(
-    'UPDATE api_keys SET owner_name = ?, daily_limit = ?, total_limit = ? WHERE id = ?',
-    [owner_name, daily_limit, total_limit, req.params.id]
-  );
+  const keys = readJSON('api_keys.json');
+  const key = keys.find(k => k.id == req.params.id);
+  if (key) {
+    key.owner_name = owner_name;
+    key.daily_limit = parseInt(daily_limit);
+    key.total_limit = parseInt(total_limit);
+    writeJSON('api_keys.json', keys);
+  }
   res.redirect('/keys');
 });
 
-// ============ REQUEST LOGS ============
+// ============ LOGS ============
 
-app.get('/logs', requireAuth, async (req, res) => {
+app.get('/logs', requireAuth, (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const search = req.query.search || '';
   const status = req.query.status || '';
   const limit = 50;
-  const offset = (page - 1) * limit;
   
-  let where = [];
-  let params = [];
+  let logs = readJSON('request_logs.json');
   
   if (search) {
-    where.push('(api_key LIKE ? OR vehicle_number LIKE ? OR owner_name LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    logs = logs.filter(l =>
+      (l.api_key && l.api_key.includes(search)) ||
+      (l.vehicle_number && l.vehicle_number.includes(search)) ||
+      (l.owner_name && l.owner_name.toLowerCase().includes(search.toLowerCase()))
+    );
   }
+  
   if (status) {
-    where.push('response_status = ?');
-    params.push(status);
+    logs = logs.filter(l => l.response_status === status);
   }
   
-  const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  logs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   
-  const [logs] = await pool.query(
-    `SELECT * FROM request_logs ${whereClause} ORDER BY created_at DESC LIMIT ?, ?`,
-    [...params, offset, limit]
-  );
-  const [total] = await pool.query(
-    `SELECT COUNT(*) as count FROM request_logs ${whereClause}`,
-    params
-  );
+  const total = logs.length;
+  const totalPages = Math.ceil(total / limit);
+  const offset = (page - 1) * limit;
+  const pagedLogs = logs.slice(offset, offset + limit);
   
-  res.render('logs', {
-    logs,
-    page,
-    search,
-    status,
-    totalPages: Math.ceil(total[0].count / limit),
-    admin: req.session.admin
-  });
+  res.render('logs', { logs: pagedLogs, page, search, status, totalPages, admin: req.session.admin });
 });
 
-app.get('/logs/delete/:id', requireAuth, async (req, res) => {
-  await pool.query('DELETE FROM request_logs WHERE id = ?', [req.params.id]);
+app.get('/logs/delete/:id', requireAuth, (req, res) => {
+  let logs = readJSON('request_logs.json');
+  logs = logs.filter(l => l.id != req.params.id);
+  writeJSON('request_logs.json', logs);
   res.redirect('/logs');
 });
 
-app.get('/logs/clear', requireAuth, async (req, res) => {
-  await pool.query('DELETE FROM request_logs');
+app.get('/logs/clear', requireAuth, (req, res) => {
+  writeJSON('request_logs.json', []);
   res.redirect('/logs');
 });
 
-app.get('/logs/export', requireAuth, async (req, res) => {
-  const [logs] = await pool.query('SELECT * FROM request_logs ORDER BY created_at DESC LIMIT 10000');
-  let csv = 'ID,API Key,Owner,Vehicle Number,IP Address,User Agent,Response Status,Response Time (ms),Timestamp\n';
+app.get('/logs/export', requireAuth, (req, res) => {
+  const logs = readJSON('request_logs.json');
+  let csv = 'ID,API Key,Owner,Vehicle,IP,Status,Time,Date\n';
   logs.forEach(l => {
-    csv += `${l.id},"${l.api_key}","${l.owner_name}","${l.vehicle_number}","${l.ip_address}","${(l.user_agent || '').replace(/"/g, '""')}","${l.response_status}",${l.response_time_ms},"${l.created_at}"\n`;
+    csv += `${l.id},"${l.api_key}","${l.owner_name}","${l.vehicle_number}","${l.ip_address}","${l.response_status}","${l.created_at}"\n`;
   });
   res.header('Content-Type', 'text/csv');
   res.attachment('request_logs.csv');
@@ -351,41 +359,55 @@ app.get('/logs/export', requireAuth, async (req, res) => {
 
 // ============ ANALYTICS ============
 
-app.get('/analytics', requireAuth, async (req, res) => {
-  const [topKeys] = await pool.query(`
-    SELECT api_key, owner_name, COUNT(*) as count 
-    FROM request_logs 
-    GROUP BY api_key, owner_name 
-    ORDER BY count DESC 
-    LIMIT 20
-  `);
+app.get('/analytics', requireAuth, (req, res) => {
+  const logs = readJSON('request_logs.json');
+  const keys = readJSON('api_keys.json');
   
-  const [topVehicles] = await pool.query(`
-    SELECT vehicle_number, COUNT(*) as count 
-    FROM request_logs 
-    GROUP BY vehicle_number 
-    ORDER BY count DESC 
-    LIMIT 20
-  `);
+  // Top keys
+  const keyUsage = {};
+  logs.forEach(l => {
+    if (l.api_key) keyUsage[l.api_key] = (keyUsage[l.api_key] || 0) + 1;
+  });
+  const topKeys = Object.entries(keyUsage)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([api_key, count]) => {
+      const key = keys.find(k => k.api_key === api_key);
+      return { api_key, owner_name: key ? key.owner_name : 'Unknown', count };
+    });
   
-  const [avgResponse] = await pool.query(`
-    SELECT AVG(response_time_ms) as avg_time 
-    FROM request_logs 
-    WHERE response_status = 'success'
-  `);
+  // Top vehicles
+  const vehicleUsage = {};
+  logs.forEach(l => {
+    if (l.vehicle_number) vehicleUsage[l.vehicle_number] = (vehicleUsage[l.vehicle_number] || 0) + 1;
+  });
+  const topVehicles = Object.entries(vehicleUsage)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([vehicle_number, count]) => ({ vehicle_number, count }));
   
-  const [hourlyData] = await pool.query(`
-    SELECT HOUR(created_at) as hour, COUNT(*) as count 
-    FROM request_logs 
-    WHERE created_at >= CURDATE()
-    GROUP BY HOUR(created_at)
-    ORDER BY hour
-  `);
+  // Avg response time
+  const successLogs = logs.filter(l => l.response_status === 'success' && l.response_time_ms);
+  const avgTime = successLogs.length > 0 
+    ? Math.round(successLogs.reduce((sum, l) => sum + l.response_time_ms, 0) / successLogs.length)
+    : 0;
+  
+  // Hourly data
+  const today = new Date().toISOString().split('T')[0];
+  const hourlyData = [];
+  for (let i = 0; i < 24; i++) {
+    const count = logs.filter(l => {
+      if (!l.created_at || !l.created_at.startsWith(today)) return false;
+      const hour = new Date(l.created_at).getHours();
+      return hour === i;
+    }).length;
+    hourlyData.push({ hour: i, count });
+  }
   
   res.render('analytics', {
     topKeys,
     topVehicles,
-    avgTime: Math.round(avgResponse[0].avg_time || 0),
+    avgTime,
     hourlyData: JSON.stringify(hourlyData),
     admin: req.session.admin
   });
@@ -393,64 +415,69 @@ app.get('/analytics', requireAuth, async (req, res) => {
 
 // ============ SETTINGS ============
 
-app.get('/settings', requireAuth, async (req, res) => {
-  const [settings] = await pool.query('SELECT * FROM settings WHERE id=1');
-  res.render('settings', { 
-    settings: settings[0], 
-    success: req.query.success,
-    admin: req.session.admin 
-  });
+app.get('/settings', requireAuth, (req, res) => {
+  const settings = readJSON('settings.json');
+  res.render('settings', { settings, success: req.query.success, admin: req.session.admin });
 });
 
-app.post('/settings', requireAuth, async (req, res) => {
+app.post('/settings', requireAuth, (req, res) => {
   const { site_name, maintenance_mode, api_enabled, theme, api_base_url } = req.body;
-  await pool.query(
-    'UPDATE settings SET site_name=?, maintenance_mode=?, api_enabled=?, theme=?, api_base_url=? WHERE id=1',
-    [
-      site_name, 
-      maintenance_mode === 'on' ? 1 : 0, 
-      api_enabled === 'on' ? 1 : 0, 
-      theme || 'light',
-      api_base_url
-    ]
-  );
+  const settings = {
+    id: 1,
+    site_name: site_name || 'Vehicle Admin',
+    maintenance_mode: maintenance_mode === 'on',
+    api_base_url: api_base_url || 'https://vehicleinfo.noobgamingv40.workers.dev/fetch',
+    theme: theme || 'light',
+    api_enabled: api_enabled === 'on'
+  };
+  writeJSON('settings.json', settings);
   res.redirect('/settings?success=1');
 });
 
-// ============ ADMIN MANAGEMENT ============
+// ============ ADMINS ============
 
-app.get('/admins', requireAuth, async (req, res) => {
-  const [admins] = await pool.query('SELECT id, username, created_at FROM admins ORDER BY created_at DESC');
+app.get('/admins', requireAuth, (req, res) => {
+  const admins = readJSON('admins.json');
   res.render('admins', { admins, admin: req.session.admin });
 });
 
-app.post('/admins/create', requireAuth, async (req, res) => {
+app.post('/admins/create', requireAuth, (req, res) => {
   const { username, password } = req.body;
-  const hash = await bcrypt.hash(password, 10);
-  try {
-    await pool.query('INSERT INTO admins (username, password) VALUES (?, ?)', [username, hash]);
-    res.redirect('/admins?success=1');
-  } catch (err) {
-    res.redirect('/admins?error=1');
+  const admins = readJSON('admins.json');
+  
+  if (admins.find(a => a.username === username)) {
+    return res.redirect('/admins?error=exists');
   }
+  
+  const hash = bcrypt.hashSync(password, 10);
+  admins.push({
+    id: Date.now(),
+    username,
+    password: hash,
+    created_at: new Date().toISOString()
+  });
+  writeJSON('admins.json', admins);
+  res.redirect('/admins?success=1');
 });
 
-app.get('/admins/delete/:id', requireAuth, async (req, res) => {
-  // Prevent deleting self
+app.get('/admins/delete/:id', requireAuth, (req, res) => {
   if (req.session.admin.id == req.params.id) {
     return res.redirect('/admins?error=self');
   }
-  await pool.query('DELETE FROM admins WHERE id = ?', [req.params.id]);
+  let admins = readJSON('admins.json');
+  admins = admins.filter(a => a.id != req.params.id);
+  writeJSON('admins.json', admins);
   res.redirect('/admins');
 });
 
-app.post('/change-password', requireAuth, async (req, res) => {
+app.post('/change-password', requireAuth, (req, res) => {
   const { current_password, new_password } = req.body;
-  const [admin] = await pool.query('SELECT * FROM admins WHERE id = ?', [req.session.admin.id]);
+  const admins = readJSON('admins.json');
+  const admin = admins.find(a => a.id == req.session.admin.id);
   
-  if (await bcrypt.compare(current_password, admin[0].password)) {
-    const hash = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE admins SET password = ? WHERE id = ?', [hash, req.session.admin.id]);
+  if (admin && bcrypt.compareSync(current_password, admin.password)) {
+    admin.password = bcrypt.hashSync(new_password, 10);
+    writeJSON('admins.json', admins);
     res.redirect('/settings?password=changed');
   } else {
     res.redirect('/settings?password=error');
@@ -459,150 +486,122 @@ app.post('/change-password', requireAuth, async (req, res) => {
 
 // ============ API ENDPOINT ============
 
-app.get('/api/fetch', async (req, res) => {
+app.get('/api/fetch', (req, res) => {
   const apiKey = req.headers['x-api-key'];
   const vehicle = req.query.vehicle;
+  const settings = readJSON('settings.json');
   
-  // Get settings
-  const [settings] = await pool.query('SELECT * FROM settings WHERE id=1');
-  const config = settings[0];
-  
-  // Maintenance Mode Check
-  if (config.maintenance_mode) {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey || 'N/A', 'N/A', vehicle || 'N/A', req.ip, req.headers['user-agent'], 'maintenance', 0]
-    );
-    return res.json({ 
-      success: false, 
-      message: 'System under maintenance. Please try later.' 
-    });
+  // Maintenance mode
+  if (settings.maintenance_mode) {
+    logRequest(apiKey, vehicle, req, 'maintenance', 0);
+    return res.json({ success: false, message: 'System under maintenance' });
   }
   
-  // API Toggle Check
-  if (!config.api_enabled) {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey || 'N/A', 'N/A', vehicle || 'N/A', req.ip, req.headers['user-agent'], 'api_off', 0]
-    );
+  // API Toggle OFF
+  if (!settings.api_enabled) {
+    logRequest(apiKey, vehicle, req, 'api_off', 0);
     return res.json({
       success: true,
-      message: 'API is currently disabled by administrator',
+      message: 'API is disabled by admin',
       data: {
         vehicle_number: vehicle || 'N/A',
         status: 'api_disabled',
-        note: 'This is a dummy response. API has been turned OFF from admin panel.'
+        note: 'API turned OFF from admin panel. Dummy response.'
       }
     });
   }
   
-  // Missing params
   if (!apiKey || !vehicle) {
-    return res.json({ 
-      success: false, 
-      message: 'Missing x-api-key header or vehicle parameter' 
-    });
+    return res.json({ success: false, message: 'Missing x-api-key or vehicle' });
   }
   
-  // Validate API Key
-  const [keys] = await pool.query('SELECT * FROM api_keys WHERE api_key = ?', [apiKey]);
-  if (!keys.length) {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, 'Unknown', vehicle, req.ip, req.headers['user-agent'], 'invalid_key', 0]
-    );
+  const keys = readJSON('api_keys.json');
+  const key = keys.find(k => k.api_key === apiKey);
+  
+  if (!key) {
+    logRequest(apiKey, vehicle, req, 'invalid_key', 0);
     return res.json({ success: false, message: 'Invalid API Key' });
   }
   
-  const key = keys[0];
-  
-  // Expiry Check
   if (key.status === 'expired' || new Date(key.expiry_date) < new Date()) {
-    await pool.query("UPDATE api_keys SET status='expired' WHERE id=?", [key.id]);
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'expired', 0]
-    );
+    key.status = 'expired';
+    writeJSON('api_keys.json', keys);
+    logRequest(apiKey, vehicle, req, 'expired', 0);
     return res.json({ success: false, message: 'API Key Expired' });
   }
   
-  // Disabled Check
   if (key.status === 'disabled') {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'disabled', 0]
-    );
+    logRequest(apiKey, vehicle, req, 'disabled', 0);
     return res.json({ success: false, message: 'API Key Disabled' });
   }
   
-  // Rate Limit Check
   const today = new Date().toISOString().split('T')[0];
   if (key.today_date !== today) {
-    await pool.query('UPDATE api_keys SET today_requests=0, today_date=? WHERE id=?', [today, key.id]);
     key.today_requests = 0;
+    key.today_date = today;
   }
+  
   if (key.today_requests >= key.daily_limit) {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'rate_limit', 0]
-    );
+    logRequest(apiKey, vehicle, req, 'rate_limit', 0);
     return res.json({ success: false, message: 'Daily limit exceeded' });
   }
   
-  if (key.request_count >= key.total_limit) {
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'total_limit', 0]
-    );
-    return res.json({ success: false, message: 'Total request limit exceeded' });
-  }
-  
-  // Make Real API Call
-  try {
-    const start = Date.now();
-    const response = await axios.get(`${config.api_base_url}?vehicle=${vehicle}`, {
-      timeout: 10000
+  // Real API call
+  const startTime = Date.now();
+  axios.get(`${settings.api_base_url}?vehicle=${vehicle}`, { timeout: 10000 })
+    .then(response => {
+      const responseTime = Date.now() - startTime;
+      key.request_count++;
+      key.today_requests++;
+      key.last_used = new Date().toISOString();
+      writeJSON('api_keys.json', keys);
+      logRequest(apiKey, vehicle, req, 'success', responseTime, key.owner_name);
+      res.json(response.data);
+    })
+    .catch(err => {
+      logRequest(apiKey, vehicle, req, 'failed', 0, key.owner_name);
+      res.json({ success: false, message: 'Upstream API error' });
     });
-    const responseTime = Date.now() - start;
-    
-    // Update counters
-    await pool.query(
-      'UPDATE api_keys SET request_count=request_count+1, today_requests=today_requests+1, last_used=NOW(), today_date=? WHERE id=?',
-      [today, key.id]
-    );
-    
-    // Log success
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'success', responseTime]
-    );
-    
-    res.json(response.data);
-  } catch (err) {
-    // Log failure
-    await pool.query(
-      'INSERT INTO request_logs (api_key, owner_name, vehicle_number, ip_address, user_agent, response_status, response_time_ms) VALUES (?,?,?,?,?,?,?)',
-      [apiKey, key.owner_name, vehicle, req.ip, req.headers['user-agent'], 'failed', 0]
-    );
-    res.json({ success: false, message: 'Upstream API error', error: err.message });
-  }
 });
 
-// ============ AUTO EXPIRE CHECKER ============
-
-setInterval(async () => {
-  try {
-    await pool.query("UPDATE api_keys SET status='expired' WHERE expiry_date < CURDATE() AND status='active'");
-  } catch (err) {
-    console.error('Auto-expire check failed:', err.message);
+function logRequest(apiKey, vehicle, req, status, responseTime, ownerName) {
+  const logs = readJSON('request_logs.json');
+  logs.push({
+    id: Date.now(),
+    api_key: apiKey || 'N/A',
+    owner_name: ownerName || 'N/A',
+    vehicle_number: vehicle || 'N/A',
+    ip_address: req.ip || 'N/A',
+    user_agent: req.headers['user-agent'] || 'N/A',
+    response_status: status,
+    response_time_ms: responseTime,
+    created_at: new Date().toISOString()
+  });
+  // Keep only last 10000 logs
+  if (logs.length > 10000) {
+    logs.splice(0, logs.length - 10000);
   }
-}, 60000); // Every 1 minute
+  writeJSON('request_logs.json', logs);
+}
 
-// ============ START SERVER ============
+// Auto-expire checker
+setInterval(() => {
+  const keys = readJSON('api_keys.json');
+  let changed = false;
+  const today = new Date().toISOString().split('T')[0];
+  keys.forEach(k => {
+    if (k.status === 'active' && k.expiry_date < today) {
+      k.status = 'expired';
+      changed = true;
+    }
+  });
+  if (changed) writeJSON('api_keys.json', keys);
+}, 60000);
+
+// ============ START ============
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Vehicle Admin Panel running on port ${PORT}`);
-  console.log(`🔗 http://localhost:${PORT}`);
+  console.log(`✅ Vehicle Admin running on http://localhost:${PORT}`);
   console.log(`👤 Login: superadmin / aura@1234`);
 });
