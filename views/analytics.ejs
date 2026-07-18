@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Analytics</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #f5f5f5; }
+    .sidebar { width: 250px; height: 100vh; position: fixed; background: #2c3e50; padding-top: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { background: #34495e; color: white; }
+    .main-content { margin-left: 250px; padding: 20px; }
+    .navbar-top { background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 10px 20px; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="text-center mb-4"><h4 class="text-white">🚗 Vehicle Admin</h4></div>
+    <ul class="nav flex-column">
+      <li class="nav-item"><a href="/" class="nav-link"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+      <li class="nav-item"><a href="/keys" class="nav-link"><i class="bi bi-key"></i> API Keys</a></li>
+      <li class="nav-item"><a href="/logs" class="nav-link"><i class="bi bi-journal-text"></i> Request Logs</a></li>
+      <li class="nav-item"><a href="/analytics" class="nav-link active"><i class="bi bi-graph-up"></i> Analytics</a></li>
+      <li class="nav-item"><a href="/admins" class="nav-link"><i class="bi bi-people"></i> Admins</a></li>
+      <li class="nav-item"><a href="/settings" class="nav-link"><i class="bi bi-gear"></i> Settings</a></li>
+    </ul>
+  </div>
+  
+  <div class="main-content">
+    <div class="navbar-top d-flex justify-content-between align-items-center mb-4">
+      <h5 class="mb-0">📊 Analytics</h5>
+      <div>
+        <span class="me-3"><i class="bi bi-person-circle"></i> <%= admin.username %></span>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+      </div>
+    </div>
+    
+    <!-- Stats -->
+    <div class="row g-3 mb-4">
+      <div class="col-md-4">
+        <div class="card bg-info text-white">
+          <div class="card-body text-center">
+            <h3><%= avgTime %>ms</h3>
+            <p>Average Response Time</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Charts -->
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header"><strong>🔝 Top API Keys</strong></div>
+          <div class="card-body">
+            <table class="table table-sm">
+              <thead>
+                <tr><th>Owner</th><th>Requests</th></tr>
+              </thead>
+              <tbody>
+                <% topKeys.forEach(k => { %>
+                <tr>
+                  <td><%= k.owner_name %></td>
+                  <td><strong><%= k.count %></strong></td>
+                </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header"><strong>🚗 Most Searched Vehicles</strong></div>
+          <div class="card-body">
+            <table class="table table-sm">
+              <thead>
+                <tr><th>Vehicle Number</th><th>Searches</th></tr>
+              </thead>
+              <tbody>
+                <% topVehicles.forEach(v => { %>
+                <tr>
+                  <td><strong><%= v.vehicle_number %></strong></td>
+                  <td><%= v.count %></td>
+                </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Hourly Chart -->
+    <div class="card mt-3">
+      <div class="card-header"><strong>⏰ Today's Hourly Distribution</strong></div>
+      <div class="card-body">
+        <canvas id="hourlyChart" height="200"></canvas>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const hourlyData = <%- hourlyData %>;
+    new Chart(document.getElementById('hourlyChart'), {
+      type: 'bar',
+      data: {
+        labels: hourlyData.map(d => d.hour + ':00'),
+        datasets: [{
+          label: 'Requests',
+          data: hourlyData.map(d => d.count),
+          backgroundColor: '#3498db'
+        }]
+      }
+    });
+  </script>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
