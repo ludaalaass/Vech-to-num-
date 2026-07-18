@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Request Logs</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <style>
+    body { background: #f5f5f5; }
+    .sidebar { width: 250px; height: 100vh; position: fixed; background: #2c3e50; padding-top: 20px; }
+    .sidebar .nav-link { color: #bdc3c7; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { background: #34495e; color: white; }
+    .main-content { margin-left: 250px; padding: 20px; }
+    .navbar-top { background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 10px 20px; }
+    .table-responsive { max-height: 600px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="text-center mb-4"><h4 class="text-white">🚗 Vehicle Admin</h4></div>
+    <ul class="nav flex-column">
+      <li class="nav-item"><a href="/" class="nav-link"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
+      <li class="nav-item"><a href="/keys" class="nav-link"><i class="bi bi-key"></i> API Keys</a></li>
+      <li class="nav-item"><a href="/logs" class="nav-link active"><i class="bi bi-journal-text"></i> Request Logs</a></li>
+      <li class="nav-item"><a href="/analytics" class="nav-link"><i class="bi bi-graph-up"></i> Analytics</a></li>
+      <li class="nav-item"><a href="/admins" class="nav-link"><i class="bi bi-people"></i> Admins</a></li>
+      <li class="nav-item"><a href="/settings" class="nav-link"><i class="bi bi-gear"></i> Settings</a></li>
+    </ul>
+  </div>
+  
+  <div class="main-content">
+    <div class="navbar-top d-flex justify-content-between align-items-center mb-4">
+      <h5 class="mb-0">📋 Request Logs</h5>
+      <div>
+        <a href="/logs/export" class="btn btn-success btn-sm me-2"><i class="bi bi-download"></i> Export CSV</a>
+        <a href="/logs/clear" class="btn btn-danger btn-sm me-2" onclick="return confirm('Clear ALL logs?')"><i class="bi bi-trash"></i> Clear All</a>
+        <span class="me-3"><i class="bi bi-person-circle"></i> <%= admin.username %></span>
+        <a href="/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+      </div>
+    </div>
+    
+    <!-- Filters -->
+    <form class="row g-2 mb-3" method="GET">
+      <div class="col-md-4">
+        <input type="text" name="search" class="form-control" placeholder="Search key, vehicle, owner..." value="<%= search || '' %>">
+      </div>
+      <div class="col-md-2">
+        <select name="status" class="form-select">
+          <option value="">All Status</option>
+          <option value="success" <%= status === 'success' ? 'selected' : '' %>>Success</option>
+          <option value="failed" <%= status === 'failed' ? 'selected' : '' %>>Failed</option>
+          <option value="invalid_key" <%= status === 'invalid_key' ? 'selected' : '' %>>Invalid Key</option>
+          <option value="expired" <%= status === 'expired' ? 'selected' : '' %>>Expired</option>
+          <option value="disabled" <%= status === 'disabled' ? 'selected' : '' %>>Disabled</option>
+          <option value="rate_limit" <%= status === 'rate_limit' ? 'selected' : '' %>>Rate Limit</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-outline-primary">Filter</button>
+      </div>
+    </form>
+    
+    <!-- Logs Table -->
+    <div class="card">
+      <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th>Time</th>
+              <th>API Key</th>
+              <th>Owner</th>
+              <th>Vehicle</th>
+              <th>IP</th>
+              <th>Status</th>
+              <th>Time (ms)</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% logs.forEach(log => { %>
+            <tr>
+              <td><small><%= new Date(log.created_at).toLocaleString() %></small></td>
+              <td><code><%= log.api_key ? log.api_key.substring(0, 8) + '...' : 'N/A' %></code></td>
+              <td><%= log.owner_name || 'N/A' %></td>
+              <td><strong><%= log.vehicle_number || 'N/A' %></strong></td>
+              <td><small><%= log.ip_address || 'N/A' %></small></td>
+              <td>
+                <span class="badge bg-<%= log.response_status === 'success' ? 'success' : log.response_status === 'failed' ? 'danger' : 'warning' %>">
+                  <%= log.response_status %>
+                </span>
+              </td>
+              <td><%= log.response_time_ms %>ms</td>
+              <td>
+                <a href="/logs/delete/<%= log.id %>" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete?')">
+                  <i class="bi bi-x"></i>
+                </a>
+              </td>
+            </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Pagination -->
+    <% if (totalPages > 1) { %>
+    <nav class="mt-3">
+      <ul class="pagination">
+        <% for (let i = 1; i <= totalPages; i++) { %>
+        <li class="page-item <%= i === page ? 'active' : '' %>">
+          <a class="page-link" href="?page=<%= i %><%= search ? '&search=' + search : '' %><%= status ? '&status=' + status : '' %>"><%= i %></a>
+        </li>
+        <% } %>
+      </ul>
+    </nav>
+    <% } %>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
